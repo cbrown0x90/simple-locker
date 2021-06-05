@@ -7,8 +7,9 @@
 #include "lock.h"
 
 int inhibited = 0;
+pthread_mutex_t listener_mutex;
+Listener listener;
 
-static Listener listener;
 
 void free_value(void* value)
 {
@@ -85,6 +86,7 @@ dbus_uint32_t gs_listener_add_inhibit(Listener *listener, const char *owner, con
         g_error("No memory");
     }
 
+    pthread_mutex_lock(&listener_mutex);
     *cookie = ++listener->inhibit_last_cookie;
 
     if (g_hash_table_size(listener->inhibit_list) == 0)
@@ -99,8 +101,8 @@ dbus_uint32_t gs_listener_add_inhibit(Listener *listener, const char *owner, con
     value->owner = g_strdup(owner);
     value->name = g_strdup(application);
 
-    // TODO struct that contains the owner and application
     g_hash_table_insert(listener->inhibit_list, cookie, value);
+    pthread_mutex_unlock(&listener_mutex);
 
     return *cookie;
 }
@@ -119,6 +121,7 @@ void gs_listener_remove_inhibit(Listener *listener, dbus_uint32_t cookie, const 
         return;
     }
 
+    pthread_mutex_lock(&listener_mutex);
     g_hash_table_remove(listener->inhibit_list, &cookie);
 
     if (g_hash_table_size(listener->inhibit_list) == 0)
@@ -128,6 +131,7 @@ void gs_listener_remove_inhibit(Listener *listener, dbus_uint32_t cookie, const 
         inhibited = 0;
         puts("UnInhibit");
     }
+    pthread_mutex_unlock(&listener_mutex);
 }
 
 DBusHandlerResult listener_inhibit(Listener *listener, DBusConnection *connection, DBusMessage *message, DBusMessage *reply)
@@ -268,6 +272,7 @@ const DBusObjectPathVTable server_vtable = {
 DBusConnection *init_dbus()
 {
     gs_listener_init(&listener);
+    pthread_mutex_init(&listener_mutex, NULL);
 
     DBusConnection *conn;
     DBusError err;

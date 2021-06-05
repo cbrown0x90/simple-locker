@@ -5,3 +5,4 @@ extern guint timeout;
 
 Display *getDpy();
 gboolean lock(gpointer data);
+gboolean removeDeadMap(gpointer user_data);

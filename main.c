@@ -27,6 +27,8 @@ int main(void)
     dbus_connection_setup_with_g_main(conn, NULL);
     /* Add the lock function to the main loop */
     timeout = g_timeout_add(1, (GSourceFunc)lock, NULL);
+    /* Add the remove dead to the main loop */
+    g_timeout_add_seconds(5, removeDeadMap, NULL);
     /* Start the glib event loop */
     g_main_loop_run(mainloop);
 

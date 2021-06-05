@@ -1,5 +1,4 @@
-#ifndef GRANDPARENT_H
-#define GRANDPARENT_H
+#pragma once
 
 #include <dbus/dbus-glib.h>
 #include <dbus/dbus.h>
@@ -17,7 +16,7 @@ typedef struct
 } HashValue;
 
 extern int inhibited;
+extern Listener listener;
+extern pthread_mutex_t listener_mutex;
 
 DBusConnection *init_dbus(void);
-
-#endif
