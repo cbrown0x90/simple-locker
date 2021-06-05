@@ -10,9 +10,20 @@ int inhibited = 0;
 
 static Listener listener;
 
+void free_value(void* value)
+{
+    if (value != NULL)
+    {
+        HashValue* hashValue = (HashValue*)value;
+        g_free(hashValue->owner);
+        g_free(hashValue->name);
+        free(hashValue);
+    }
+}
+
 void gs_listener_init(Listener *listener)
 {
-    listener->inhibit_list = g_hash_table_new(g_int_hash, g_int_equal);
+    listener->inhibit_list = g_hash_table_new_full(g_int_hash, g_int_equal, g_free, free_value);
 }
 
 /*
@@ -32,7 +43,7 @@ const char *server_introspection_xml = DBUS_INTROSPECT_1_0_XML_DOCTYPE_DECL_NODE
 
     "  <interface name='org.freedesktop.ScreenSaver'>\n"
     "    <method name=\"Inhibit\">\n"
-    "      <arg direction=\"out\" type=\"u\"/>\n"
+    "      <arg name=\"cookie\" direction=\"out\" type=\"u\"/>\n"
     "      <arg name=\"application_name\" direction=\"in\" type=\"s\"/>\n"
     "      <arg name=\"reason_for_inhibit\" direction=\"in\" type=\"s\"/>\n"
     "    </method>\n"
@@ -64,7 +75,7 @@ void raise_property_type_error(DBusConnection *connection, DBusMessage *in_reply
     dbus_message_unref(reply);
 }
 
-dbus_uint32_t gs_listener_add_inhibit(Listener *listener, const char *owner)
+dbus_uint32_t gs_listener_add_inhibit(Listener *listener, const char *owner, const char* application)
 {
     dbus_uint32_t *cookie;
 
@@ -84,23 +95,26 @@ dbus_uint32_t gs_listener_add_inhibit(Listener *listener, const char *owner)
         puts("Inhibit");
     }
 
-    g_hash_table_insert(listener->inhibit_list, cookie, g_strdup(owner));
+    HashValue* value = (HashValue*)malloc(sizeof(HashValue));
+    value->owner = g_strdup(owner);
+    value->name = g_strdup(application);
+
+    // TODO struct that contains the owner and application
+    g_hash_table_insert(listener->inhibit_list, cookie, value);
 
     return *cookie;
 }
 
 void gs_listener_remove_inhibit(Listener *listener, dbus_uint32_t cookie, const char *owner)
 {
-    const gchar *owned;
+    const HashValue* value = g_hash_table_lookup(listener->inhibit_list, &cookie);
 
-    owned = g_hash_table_lookup(listener->inhibit_list, &cookie);
-
-    if (owned == NULL)
+    if (value->owner == NULL)
     {
         return;
     }
 
-    if (strcmp(owner, owned) != 0)
+    if (strcmp(owner, value->owner) != 0)
     {
         return;
     }
@@ -109,29 +123,20 @@ void gs_listener_remove_inhibit(Listener *listener, dbus_uint32_t cookie, const 
 
     if (g_hash_table_size(listener->inhibit_list) == 0)
     {
-        puts("UnInhibit");
         Display *dpy = getDpy();
         XScreenSaverSuspend(dpy, 0);
         inhibited = 0;
-
-        // Remove and add appropriate timeout after re-enabling the screen saver
-        // TODO do I need to do this
-        g_source_remove(timeout);
-        lock(NULL);
-
         puts("UnInhibit");
     }
 }
 
-DBusHandlerResult listener_inhibit(Listener *listener, DBusConnection *connection, DBusMessage *message)
+DBusHandlerResult listener_inhibit(Listener *listener, DBusConnection *connection, DBusMessage *message, DBusMessage *reply)
 {
     const char *path;
     int type;
     DBusMessageIter iter;
-    DBusMessage *reply;
     dbus_uint32_t cookie;
     const char *application;
-    const char *reason;
 
     path = dbus_message_get_path(message);
 
@@ -145,6 +150,7 @@ DBusHandlerResult listener_inhibit(Listener *listener, DBusConnection *connectio
     }
 
     dbus_message_iter_get_basic(&iter, &application);
+    printf("%s\n", application);
 
     dbus_message_iter_next(&iter);
     type = dbus_message_iter_get_arg_type(&iter);
@@ -155,27 +161,9 @@ DBusHandlerResult listener_inhibit(Listener *listener, DBusConnection *connectio
         return DBUS_HANDLER_RESULT_HANDLED;
     }
 
-    dbus_message_iter_get_basic(&iter, &reason);
+    cookie = gs_listener_add_inhibit(listener, dbus_message_get_sender(message), application);
 
-    cookie = gs_listener_add_inhibit(listener, dbus_message_get_sender(message));
-
-    reply = dbus_message_new_method_return(message);
-
-    dbus_message_iter_init_append(reply, &iter);
-
-    if (reply == NULL)
-    {
-        g_error("No memory");
-    }
-
-    dbus_message_iter_append_basic(&iter, DBUS_TYPE_UINT32, &cookie);
-
-    if (!dbus_connection_send(connection, reply, NULL))
-    {
-        g_error("No memory");
-    }
-
-    dbus_message_unref(reply);
+    dbus_message_append_args(reply, DBUS_TYPE_UINT32, &cookie, DBUS_TYPE_INVALID);
 
     return DBUS_HANDLER_RESULT_HANDLED;
 }
@@ -202,25 +190,10 @@ DBusHandlerResult listener_uninhibit(Listener *listener, DBusConnection *connect
 
     gs_listener_remove_inhibit(listener, cookie, dbus_message_get_sender(message));
 
-    DBusMessage *reply;
-
     if (dbus_message_get_no_reply(message))
     {
         return DBUS_HANDLER_RESULT_HANDLED;
     }
-
-    reply = dbus_message_new_method_return(message);
-    if (reply == NULL)
-    {
-        g_error("No memory");
-    }
-
-    if (!dbus_connection_send(connection, reply, NULL))
-    {
-        g_error("No memory");
-    }
-
-    dbus_message_unref(reply);
 
     return DBUS_HANDLER_RESULT_HANDLED;
 }
@@ -235,50 +208,57 @@ DBusHandlerResult listener_uninhibit(Listener *listener, DBusConnection *connect
  * implemented by 'Server' object. This also can be used by tools such
  * as d-feet(1) and can be queried by:
  *
- * TODO
- * $ gdbus introspect --session --dest org.example.TestServer --object-path
+ * $ gdbus introspect --session --dest org.freedesktop.ScreenSaver --object-path /ScreenSaver
  * /org/example/TestObject
  */
 DBusHandlerResult server_message_handler(DBusConnection *conn, DBusMessage *message, void *data)
 {
-    DBusError err;
+    DBusHandlerResult res = DBUS_HANDLER_RESULT_HANDLED;
 
-    /*
-     * Does not allocate any memory; the error only needs to be
-     * freed if it is set at some point.
-     */
+    DBusError err;
     dbus_error_init(&err);
+
+    DBusMessage *reply = dbus_message_new_method_return(message);
+    if (reply == NULL) goto fail;
 
     if (dbus_message_is_method_call(message, "org.freedesktop.ScreenSaver", "Inhibit"))
     {
-        return listener_inhibit(&listener, conn, message);
+        res = listener_inhibit(&listener, conn, message, reply);
     }
     else if (dbus_message_is_method_call(message, "org.freedesktop.ScreenSaver", "UnInhibit"))
     {
-        return listener_uninhibit(&listener, conn, message);
+        res = listener_uninhibit(&listener, conn, message);
     }
-    /* TODO implement this
-        else if (dbus_message_is_method_call(message,
-DBUS_INTERFACE_INTROSPECTABLE, "Introspect"))
+    else if (dbus_message_is_method_call(message, DBUS_INTERFACE_INTROSPECTABLE, "Introspect"))
     {
 
-                if (!(reply = dbus_message_new_method_return(message)))
-                        goto fail;
-fail: // TODO fix this
-
-                dbus_message_append_args(reply,
-                                         DBUS_TYPE_STRING,
-&server_introspection_xml, DBUS_TYPE_INVALID);
-
-        // TODO
-        return 0;
-
-        }
-    */
+        dbus_message_append_args(reply,
+                     DBUS_TYPE_STRING, &server_introspection_xml,
+                     DBUS_TYPE_INVALID);
+    }
     else
     {
         return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
     }
+
+fail:
+    if (reply == NULL)
+    {
+        return DBUS_HANDLER_RESULT_NEED_MEMORY;
+    }
+
+    if (res == DBUS_HANDLER_RESULT_HANDLED)
+    {
+        if (!dbus_connection_send(conn, reply, NULL))
+        {
+            g_error("No memory");
+            res = DBUS_HANDLER_RESULT_NEED_MEMORY;
+        }
+    }
+
+    dbus_message_unref(reply);
+
+    return res;
 }
 
 const DBusObjectPathVTable server_vtable = {

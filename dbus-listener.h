@@ -10,6 +10,12 @@ typedef struct
     GHashTable *inhibit_list;
 } Listener;
 
+typedef struct
+{
+    gchar* owner;
+    gchar* name;
+} HashValue;
+
 extern int inhibited;
 
 DBusConnection *init_dbus(void);
