@@ -1,4 +1,4 @@
-CFLAGS = -g -Wall -Werror -c
+CFLAGS = -Wall -Werror -c
 LDFLAGS =
 
 CFLAGS += `pkg-config --cflags dbus-1`
@@ -17,6 +17,9 @@ OBJECTS = $(SOURCES:.c=.o)
 EXECUTABLE = simple-locker
 
 all: $(SOURCES) $(EXECUTABLE)
+
+debug: CFLAGS += -g -Og -ggdb
+debug: all
 
 $(EXECUTABLE): $(OBJECTS)
 	gcc $(OBJECTS) -o $@ $(LDFLAGS)
